@@ -49,3 +49,11 @@ async def hello_world(x):
     await asyncio.sleep(x)
 
 asyncio.run(hello_world(2))
+print("dasdf")
+print("dasdf")
+print("dasdf")
+print("dasdf")
+print("dasdf")
+print("dasdf")
+print("dasdf")
+print("dasdf")
