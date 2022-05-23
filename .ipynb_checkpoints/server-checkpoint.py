@@ -57,9 +57,48 @@ model_lock = threading.Lock()
 # client training related
 round_num = 20
 C = 1
-E = 3
+E = 1
 
 
+'''
+Model
+'''
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.utils.data as dset
+import torch.optim as optim
+import time
+
+import torchvision
+from torchvision import datasets, transforms
+
+torch.manual_seed(1)
+
+image_x = 28
+image_y = 28
+image_channel = 1
+output_channel = 10
+
+class MNIST_NN(nn.Module):
+    def __init__(self, image_x, image_y, image_channel, output_channel):
+        super(MNIST_NN, self).__init__()
+        
+        self.conv_1 = nn.Conv2d(1, 32, kernel_size=(5,5))
+        self.conv_2 = nn.Conv2d(32, 64, kernel_size=(5,5))
+        
+        self.linear_1 = nn.Linear(1024, 256)
+        self.linear_2 = nn.Linear(256, output_channel)
+        
+    def forward(self, image):
+        out = F.max_pool2d(F.relu(self.conv_1(image)), kernel_size=(2,2))
+        out = F.max_pool2d(F.relu(self.conv_2(out)), kernel_size=(2,2))
+        
+        out = self.linear_1(torch.flatten(out, 1))
+        out = self.linear_2(out)
+        
+        return out
+    
 '''
 clientMgr
     share the global dataframe, it will check it's own state to get information it needs
@@ -111,8 +150,8 @@ class clientMgr(threading.Thread):
             # check FL workflow
             status = df.iloc[self.num]['status']
             if status == 'selected training':
-                print(f'client {self.num} selected training {model}')
-                self.send({'E': E, 'model': model})
+                print(f'client {self.num} selected training')
+                self.send({'E': E, 'model': model.state_dict()})
                 df.iloc[self.num, df.columns.get_loc('status')] = 'training'
                 
             elif status == 'training':
@@ -247,6 +286,8 @@ class server(threading.Thread):
         
         while(training):
             for round in range(round_num):
+                # save model
+                # torch.save(model.state_dict(), PATH)
                 # 'selection'
                 # set their status to 'selected training'
                 df.iloc[ df.sample(frac = C).index, df.columns.get_loc('status')] = 'selected training'
@@ -264,11 +305,16 @@ class server(threading.Thread):
                 total_data_amt = 0
                 for model_obj in model_queue:
                     data_amt = model_obj['data_amt']
-                    model += data_amt * model_obj['model']
+                    
+                    model_dict = model.state_dict()
+                    for k in model_dict.keys():
+                        model_dict[k] = torch.stack([model_queue[i]['model'][k].float()
+                                                      for i in range(len(model_queue))], 0).mean(0)
+                    model.load_state_dict(model_dict)
                     total_data_amt += data_amt
                 
                 model_queue.clear()
-                model /= (total_data_amt + 1)
+#                 model /= (total_data_amt + 1)
                 print(f'Round {round} completed!')
             
             training = False
@@ -280,6 +326,9 @@ class server(threading.Thread):
             client_info = client_infos.pop()
             client_info.join()
             del client_info
+
+device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+model = MNIST_NN(image_x, image_y, image_channel, output_channel).to(device)
 
 connectionMgr = connectionMgr(model_lock)
 server = server(round_num, E, C, model_lock)
