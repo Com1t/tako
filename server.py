@@ -55,13 +55,13 @@ model_queue = []
 model_lock = threading.Lock()
 
 # client training related
-round_num = 2
-C = 0.5
+round_num = 20
+C = 1
 E = 3
 
 
 '''
-Client
+clientMgr
     share the global dataframe, it will check it's own state to get information it needs
     Generally, two thing will be concluded constantly
     1. Check heart beat
@@ -79,21 +79,23 @@ Client
             and update some 'sys_info', in the globaly shared dataframe
 '''
 
-class client(threading.Thread):
+class clientMgr(threading.Thread):
     def __init__(self, context, socket, num, lock):
         global df
         threading.Thread.__init__(self)
+        # globaly shared lock
+        self.lock = lock
+        
         self.context = context
         self.socket = socket
         self.num = num
-        self.lock = lock
         df.iloc[self.num, df.columns.get_loc('heartbeat')] = np.datetime64('now')
         
     def run(self):
         global df, model, training
         while(training):
             time.sleep(0.1)
-            # check heartbeat
+            # check receive message
             msg = self.recv()
             
             # check heartbeat
@@ -109,21 +111,21 @@ class client(threading.Thread):
             # check FL workflow
             status = df.iloc[self.num]['status']
             if status == 'selected training':
-                print(f'{self.num} selected training {model}')
+                print(f'client {self.num} selected training {model}')
                 self.send({'E': E, 'model': model})
                 df.iloc[self.num, df.columns.get_loc('status')] = 'training'
                 
             elif status == 'training':
-                if(msg != False and msg != 'heartbeat'):
+                if(msg is not None and msg != 'heartbeat'):
                     # it must be model
-                    print(f'{self.num} received {msg} {type(msg)}')
+                    print(f'client {self.num} received {msg} {type(msg)}')
                     for info in msg['sys_info'].keys():
                         df.iloc[self.num, df.columns.get_loc(info)] = msg['sys_info'][info]
                     
                     # since this queue is globaly shared, we have to ensure concurrency
                     self.lock.acquire()
-                    model_queue.append({'data_amt': msg['sys_info']['data amount'], 'model': msg['model']})
-                    print(model_queue)
+                    model_queue.append({'data_amt': msg['sys_info']['data amount'], 
+                                        'model': msg['model']})
                     self.lock.release()
                     
                     df.iloc[self.num, df.columns.get_loc('status')] = 'standby'
@@ -146,17 +148,18 @@ class client(threading.Thread):
             # a message has been received
             return obj
         except zmq.Again as e:
-            return False
+            return None
 
 '''
-Estblish Connection
-    Two key component on server
-    1. Initial Server Connection
-        Every client can reach server by this connection,
-        while this connection is only for establishing a p2p connection
-    2. p2p connection
-        After built initial server connection, server will build an p2p connection
-        This can provide a clear way to communicate between server and client
+connectionMgr
+    Registrate new cleint, and build p2p connection with client
+        Two key component on server
+        1. Initial Server Connection
+            Every client can reach server by this connection,
+            while this connection is only for establishing a p2p connection
+        2. p2p connection
+            After built initial server connection, server will build an p2p connection
+            This can provide a clear way to communicate between server and client
 '''
 class connectionMgr(threading.Thread):
     def __init__(self, lock):
@@ -164,25 +167,26 @@ class connectionMgr(threading.Thread):
         # globaly shared lock
         self.lock = lock
         
-        # server variable
+        # connectionMgr server variable
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.REP)
         self.socket.bind("tcp://*:7788")
         
-    def run(self):
-        # create new context or not        
+    def run(self):       
         global df, client_num, training, client_infos
         while(training):
+            # wait a bit
+            time.sleep(0.1)
             recv_df = self.recv()
             if recv_df is not None:
-                print('new client info', recv_df)
+                # in server side the only message that flows to here will be registration msg
+                print('new client info\n', recv_df)
                 self.send('ack')
 
                 # Estblish p2p Connection
                 cur_context = zmq.Context()
                 cur_socket = cur_context.socket(zmq.PAIR)
-                client_ip = recv_df.iloc[0]['ip']
-                client_port = recv_df.iloc[0]['port']
+                client_ip, client_port = recv_df.iloc[0]['ip'], recv_df.iloc[0]['port']
                 cur_socket.connect(f"tcp://{client_ip}:{client_port}")
 
                 cur_socket.send_pyobj("server side connection built")
@@ -191,7 +195,7 @@ class connectionMgr(threading.Thread):
                 if "client side connection built" == cur_socket.recv_pyobj():
                     df = df.append(recv_df, ignore_index=True)
                     df.iloc[client_num,df.columns.get_loc('status')] = 'standby'
-                    client_infos.append(client(cur_context, cur_socket, client_num, self.lock))
+                    client_infos.append(clientMgr(cur_context, cur_socket, client_num, self.lock))
                     client_infos[client_num].start()
                     time.sleep(0.2)
                     print('New client registered')
@@ -199,7 +203,6 @@ class connectionMgr(threading.Thread):
                 # if not we revert
                 else:
                     print("Connection Error")
-        print('Connection complete')
         
     def __del__(self):
         self.socket.close()
@@ -219,7 +222,15 @@ class connectionMgr(threading.Thread):
         except zmq.Again as e:
             return None
         
-
+'''
+server
+    Complete the FL workflow for 'round_num', and delete/join clients when completion
+    1. Selection
+        Select clients to participate training,
+        clientMgr(server side) will send model to client(client side) automatically
+    2. Aggregation
+        After 'wait until completion', we can aggregate models in globally shared 'model_queue'
+'''
 class server(threading.Thread):
     def __init__(self, round_num, E, C, lock):
         threading.Thread.__init__(self)
@@ -234,34 +245,23 @@ class server(threading.Thread):
         while(client_num < min_client):
             time.sleep(0.1)
         
-#         while(training):
-#             inst = input('getting inst ')
-#             if(inst == 'send'):
-#                 dest = input('getting dest ')
-#                 model = input('getting model ')
-#                 df.iloc[int(dest),df.columns.get_loc('status')] = 'selected training'
-#             if(inst == 'show'):
-#                 print(df)
-        
         while(training):
             for round in range(round_num):
-                # select client, and set their status to 'selected training'
+                # 'selection'
+                # set their status to 'selected training'
                 df.iloc[ df.sample(frac = C).index, df.columns.get_loc('status')] = 'selected training'
-                print('selected training', df)
+                print('selected training\n', df)
                 
+                # 'wait until completion'
                 # status still having 'selected training' and 'training', we need to wait until complete
                 while(len(df.loc[(df['status'] == 'training') | 
                                  (df['status'] == 'selected training')]) > 0):
                     time.sleep(0.1)
                 
-#                 print(df.loc[(df['status'] == 'training') | 
-#                              (df['status'] == 'selected training')])
+                print("client side complete!")
                 
-                print("complete client side")
-                
-                # aggregation
+                # 'Aggregation'
                 total_data_amt = 0
-                print(len(model_queue))
                 for model_obj in model_queue:
                     data_amt = model_obj['data_amt']
                     model += data_amt * model_obj['model']
@@ -269,7 +269,7 @@ class server(threading.Thread):
                 
                 model_queue.clear()
                 model /= (total_data_amt + 1)
-                print("complete")
+                print(f'Round {round} completed!')
             
             training = False
             
@@ -280,7 +280,6 @@ class server(threading.Thread):
             client_info = client_infos.pop()
             client_info.join()
             del client_info
-        print('join complete')
 
 connectionMgr = connectionMgr(model_lock)
 server = server(round_num, E, C, model_lock)
@@ -290,8 +289,6 @@ server.start()
 
 
 server.join()
-print('server joined')
 connectionMgr.join()
-print('connectionMgr joined')
 
 print("Done.")
