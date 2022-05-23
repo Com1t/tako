@@ -1,6 +1,7 @@
 import zmq
 import sys
 import time
+import json
 import pandas as pd
 
 port = int(sys.argv[1])
@@ -8,6 +9,8 @@ df = pd.DataFrame({
     "ip": "127.0.0.1",
     "port": port,
     "cpu": 30, 
+    "gradient_norm": 0.0,
+    "data amount": 100,
     "connectivity": 60
 }, index=[0])
 
@@ -36,12 +39,36 @@ def recv():
     except zmq.Again as e:
         return False
 
+training = True
 heartrate = 0
-while(True):
+while(training):
     msg = recv()
     if(msg != False):
-        print(msg)
-        socket.send_pyobj("ack")
+        # we should only receive model or terminate signal
+        # terminate
+        if(msg == 'training complete'):
+            training = False
+        # this part should be another thread in order to keep out heart beating
+        elif(type(msg) == dict):
+            print("chosen")
+            epoch = int(msg['E'])
+            model = msg['model']
+            model += 0.1
+            print(type({'sys_info': {
+                                            "cpu": 30, 
+                                            "gradient_norm": 0.0,
+                                            "data amount": 100,
+                                            "connectivity": 60}, 
+                               'model': model}))
+            socket.send_pyobj({'sys_info': {
+                                            "cpu": 30, 
+                                            "gradient_norm": 0.0,
+                                            "data amount": 100,
+                                            "connectivity": 60}, 
+                               'model': model})
+        else:
+            print(msg, type(msg))
+
     time.sleep(0.2)
     heartrate += 1
     if(heartrate == 30):

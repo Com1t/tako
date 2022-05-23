@@ -23,6 +23,7 @@ class Worker(threading.Thread):
 
 my_queue = queue.Queue()
 for i in range(5):
+    
   my_queue.put("Data %d" % i)
 
 # 建立 lock
