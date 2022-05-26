@@ -42,7 +42,7 @@ dtypes = np.dtype(
 df = pd.DataFrame(np.empty(0, dtype=dtypes))
 
 client_num = 0
-min_client = 2
+min_client = 20
 training = True
 timeout = np.timedelta64(1,'m')
 
@@ -56,7 +56,7 @@ model_lock = threading.Lock()
 
 # client training related
 round_num = 20
-C = 1
+C = 0.5
 E = 1
 
 
@@ -279,10 +279,14 @@ class server(threading.Thread):
         self.round_num = round_num
 
     def run(self):
-        global df, training, min_client, model
+        global df, training, min_client, model, device
         # wait until enough client
         while(client_num < min_client):
             time.sleep(0.1)
+            
+        from torch_npz.FLDataset import FLDataset
+        test_data = FLDataset('/ML/FL_algo/nonIIDdataset/client_1.pickle', 'test')
+        testLoader = dset.DataLoader(test_data, batch_size=1024, shuffle=False)
         
         while(training):
             for round in range(round_num):
@@ -314,7 +318,16 @@ class server(threading.Thread):
                     total_data_amt += data_amt
                 
                 model_queue.clear()
-#                 model /= (total_data_amt + 1)
+                with torch.no_grad():
+                    correct_count = 0
+                    for _, (data) in enumerate(testLoader):
+                        image = data[0].to(device)
+                        labels = data[1].to(device)
+                        output = model(image)
+                        predict_label = torch.argmax(nn.Softmax(dim=1)(output), dim=1, keepdim=False)
+                        correct_count += (predict_label == labels).float().sum()
+                    acc = correct_count / len(test_data)
+                    print('Acc : {:.4f}'.format(acc.item()))
                 print(f'Round {round} completed!')
             
             training = False
@@ -327,7 +340,7 @@ class server(threading.Thread):
             client_info.join()
             del client_info
 
-device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+device = 'cpu'
 model = MNIST_NN(image_x, image_y, image_channel, output_channel).to(device)
 
 connectionMgr = connectionMgr(model_lock)

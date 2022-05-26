@@ -42,7 +42,7 @@ class MNIST_NN(nn.Module):
         return out
     
 class fit(threading.Thread):
-    def __init__(self, E):
+    def __init__(self, E, client_num):
         global model
         threading.Thread.__init__(self)
         self.E = E
@@ -51,7 +51,8 @@ class fit(threading.Thread):
             [transforms.ToTensor(),
              transforms.Normalize((0.5,), (0.5,)),]
         )
-        self.train_data = datasets.MNIST(root='MNIST', download=True, train=True, transform=self.transform)
+        from torch_npz.FLDataset import FLDataset
+        self.train_data = FLDataset(f'/ML/FL_algo/nonIIDdataset/client_{client_num}.pickle', 'train')
         self.trainLoader = dset.DataLoader(self.train_data, batch_size=256, shuffle=True)
         self.loss_function = nn.CrossEntropyLoss()
         self.loss = None
@@ -80,7 +81,7 @@ class fit(threading.Thread):
         training_complete = True
         
 class client(threading.Thread):
-    def __init__(self, ip, port, timeout, cpu, data_amt, connectivity):
+    def __init__(self, ip, port, client_num, timeout, cpu, data_amt, connectivity):
         threading.Thread.__init__(self)
         self.training = True
         
@@ -134,7 +135,7 @@ class client(threading.Thread):
                     model.load_state_dict(msg['model'])
                     # start training thread
                     training_complete = False
-                    self.training_obj = fit(epoch)
+                    self.training_obj = fit(epoch, client_num)
                     self.training_obj.start()
                 else:
                     print(msg, type(msg))
@@ -192,8 +193,9 @@ class client(threading.Thread):
         except zmq.Again as e:
             return None
 
+client_num = int(sys.argv[2])
 training_complete = False
-device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+device = f'cuda:{client_num % 4}' if torch.cuda.is_available() else 'cpu'
 model = MNIST_NN(image_x, image_y, image_channel, output_channel).to(device)
 batch_grad_norm = 0.0
 
@@ -203,7 +205,7 @@ timeout = 30
 cpu = 60
 data_amt = 100
 connectivity = 70
-client = client(ip, port, timeout, cpu, data_amt, connectivity)
+client = client(ip, port, client_num, timeout, cpu, data_amt, connectivity)
 
 client.start()
 
