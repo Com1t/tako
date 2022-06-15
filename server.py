@@ -42,7 +42,7 @@ dtypes = np.dtype(
 df = pd.DataFrame(np.empty(0, dtype=dtypes))
 
 client_num = 0
-min_client = 20
+min_client = 3
 training = True
 timeout = np.timedelta64(1,'m')
 

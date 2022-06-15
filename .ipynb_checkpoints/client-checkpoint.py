@@ -195,7 +195,7 @@ class client(threading.Thread):
 
 client_num = int(sys.argv[2])
 training_complete = False
-device = f'cuda:{client_num % 4}' if torch.cuda.is_available() else 'cpu'
+device = 'cpu' # f'cuda:{client_num % 4}' if torch.cuda.is_available() else 'cpu'
 model = MNIST_NN(image_x, image_y, image_channel, output_channel).to(device)
 batch_grad_norm = 0.0
 
@@ -205,6 +205,7 @@ timeout = 30
 cpu = 60
 data_amt = 100
 connectivity = 70
+
 client = client(ip, port, client_num, timeout, cpu, data_amt, connectivity)
 
 client.start()
