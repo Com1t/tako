@@ -285,7 +285,7 @@ class server(threading.Thread):
             time.sleep(0.1)
             
         from torch_npz.FLDataset import FLDataset
-        test_data = FLDataset('/ML/FL_algo/nonIIDdataset/client_1.pickle', 'test')
+        test_data = FLDataset('/ML/FL_algo/IIDdataset/client_1.pickle', 'test')
         testLoader = dset.DataLoader(test_data, batch_size=1024, shuffle=False)
         
         while(training):

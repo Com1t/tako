@@ -52,12 +52,15 @@ class fit(threading.Thread):
              transforms.Normalize((0.5,), (0.5,)),]
         )
         from torch_npz.FLDataset import FLDataset
-        self.train_data = FLDataset(f'/ML/FL_algo/nonIIDdataset/client_{client_num}.pickle', 'train')
+        self.train_data = FLDataset(f'/ML/FL_algo/IIDdataset/client_{client_num}.pickle', 'train')
         self.trainLoader = dset.DataLoader(self.train_data, batch_size=256, shuffle=True)
         self.loss_function = nn.CrossEntropyLoss()
         self.loss = None
         print(model.parameters())
         self.optimizer = optim.Adam(model.parameters(), lr=0.001)
+        
+    def data_amt(self):
+        return len(self.trainLoader.dataset)
         
     def run(self):
         global training_complete, model, batch_grad_norm, device
@@ -136,11 +139,13 @@ class client(threading.Thread):
                     # start training thread
                     training_complete = False
                     self.training_obj = fit(epoch, client_num)
+                    self.data_amt = self.training_obj.data_amt()
                     self.training_obj.start()
                 else:
                     print(msg, type(msg))
 
             if(training_complete):
+                print(self.data_amt)
                 self.training_obj.join()
                 training_complete = False
                 self.send({'sys_info': {"cpu": self.cpu, 
